@@ -19,28 +19,6 @@ simulated_folder <- paste0(getwd(),"/Simulated_data/")
 unlink(simulated_folder, recursive = TRUE)
 dir.create(simulated_folder)
 
-# considering the above code we need to modify so that we can consider some other scenarios and conditions to test.
-# We want to Simulate again the data so that we can generate the "expression" distribution which will follow a normal distribution
-# this will be the global distribution of expression associated with all the cells in the experiment
-# we need to generate cells harbouring TRUE regulators in both positive and negative directions
-# so modelling as a normal distribution we can consider the global having mean 0 and sd 1 (later we can generate different distributions with different sd)
-# we can simulate to sort the top 15% and bottom 15% of the distribution.
-# When assembling the Simulation we will control for:
-# number of genes: n_genes (these will include TRUE regulators and non-regulators)
-# n_pos_regulators: n_pos_regulators
-# n_neg_regulators: n_neg_regulators
-# number of non-targeting gRNA: n_nt_gRNA
-# number of gRNA per gene: n_guide
-# so in total we will have tot_gRNA = (n_genes * n_guide) + n_nt_gRNA
-# Then we will consider the distribution of the expression signal for the TRUE regulators which will be modelled as skew normal distribution having:
-# mu_pos = 0.5 and sd_pos = 0.1
-# mu_neg = -0.5 and sd_neg = 0.1 .. these values can be tested to evaluate the impact of asymmetric disposition and number of pos and neg
-# so we will assume that the sum of the skewed distribution with the global will generate still a normal distribution..
-# basically the skewed pos and neg are inscribed within the global distribution of expression.
-# So we simulate that within the bins we will get both true and non-true regulators.
-# By summing the 3 distribution we need to make them at the end normally distributed.
-# we will then simulate read counts per cells sorted.
-
 # Define the composition of the library, the proportion between positive and negative regulators, the number of non-targeting gRNA and the number of gRNA per gene
 total_genes <- c(700,1500) # n° of target genes
 n_no_effect <- c(0.9,0.7)  # percentage of genes not having an effect
