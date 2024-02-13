@@ -1,2 +1,2 @@
-# Ignore files in a specific director
-./Simulated_data/*
+# Ignore files in a specific directory
+Simulated_data/
