@@ -138,7 +138,14 @@ mass_kde2_parallel <- function(l){
         # on the othet hand if the log2fc has estimated bandwidth of 0 we through an error:
         if(h[2] == 0){
             stop("ERROR: bandwidth for log2fc is 0")
-        }
+            # exit to any apply or lapply or bplapply
+            return(NULL) 
+            }else{
+                if(h[2] <= 0.05){
+                    h[2] = 0.05 # as we binned the L2FC in 0.01 we set the bandwidth to 0.01 in case the estimate exceeds 0.01 - this control vectors dimensions
+                }
+            }
+
         kde2d <- MASS::kde2d( 
             l[["xy"]]$n_hits, 
             l[["xy"]]$log2fc, 
@@ -149,9 +156,11 @@ mass_kde2_parallel <- function(l){
                     c(min(l[["n_v"]])*2, max(l[["n_v"]])*2) # for the y axis we consider the log2fc
                     )
             )
+
         saveRDS(kde2d,paste0("kde2d_",Sys.Date(),"_",Sys.time(),"_",Sys.getpid(),"_",l[["id"]],".rds"))
         # delete the kde2d object to free up memory:
         rm(kde2d)
+        gc()
         return(NULL)
     }
 
@@ -162,10 +171,12 @@ mass_kde2_parallel <- function(l){
 
 setwd("/hpcnfs/data/GN2/fgualdrini/Master_batch_scripts/CRISPR_TOOLS_BANCH/Simulations_KERNEL/")
 
+## files are in "Simulated_data"
+all_simulations <- list.files("/hpcnfs/data/GN2/fgualdrini/Master_batch_scripts/CRISPR_TOOLS_BANCH/Simulations_KERNEL/Simulated_data/total_genes_2000_n_no_effect_0.9_pos_neg_ratio_0.5_n_gRNA_10_pos_effect_variance_0.5_mean_pos_effect_0.5_neg_effect_variance_0.5_mean_neg_effect_0.5_depth_factors_200_noise_variance_0.05/sorted_0.1",pattern="_all.txt",full.names=TRUE,recursive=TRUE)
 
 opt <- list()
-opt$file <- "/hpcnfs/data/GN2/fgualdrini/Master_batch_scripts/CRISPR_TOOLS_BANCH/Simulations_KERNEL/groundTruth_reps_ALL.txt"
-opt$processes <- 3
+opt$file <- all_simulations[1]
+opt$processes <- 5
 opt$skip_outliers <- TRUE
 opt$target <- "LOW"
 opt$control <- "HIGH"
@@ -174,6 +185,8 @@ opt$use_nt_scramble <- TRUE
 opt$scramble_id <- "scrambled"
 opt$grna_id_col <- 1
 
+#
+simulation_path <- dirname(opt$file)
 
 # Parse the cpus:
 cpus=as.numeric(as.character(opt$processes)) - 1
@@ -207,20 +220,25 @@ cat("Target:",target,"\n")
 cat("Control:",control,"\n")
 
 # Saving folder will always be the workdirector:
-save_folder=paste0(getwd(),paste0("/CrisprRes",target,"_vs_",control,"/"))
+save_folder=paste0(simulation_path,paste0("/CrisprRes",target,"_vs_",control,"/"))
+unlink(save_folder, recursive = TRUE)
 dir.create(save_folder)
 
 # We read the input file:
 x = read.delim(opt$file,sep="\t",header=TRUE,row.names=NULL,stringsAsFactors=FALSE)
-rownames(x) = x[,"elements_rep1"]
-# select poisson:
-x = x[,grep("nbinom",colnames(x))]
-# first two columns are start and end:
-samples.vec <- colnames(x)
-samples.vec <- samples.vec[!grepl("start|end|gene",tolower(samples.vec))]
+gRNA_names <- grep("elements_",colnames(x) )
+# if on multiple columns merge them so that repeated elements on difrerent columns will be removed:
+gRNA_names <- x[,gRNA_names]
+gRNA_names <- apply(gRNA_names,1,function(x){unique(x)})
+rownames(x) = gRNA_names
+# We keep the counts only:
+samples.vec <- colnames(x)[grep("_r[0-9]$|_rep[0-9]$",tolower(colnames(x)))]
+# samples should be within c("plasmid","presort","low","high"):
+samples.vec <- samples.vec[grepl("^plasmid|^presort|^low|^high",tolower(samples.vec))]
+x <- x[,samples.vec]
+
 
 # check if replicates are present, they should be ending in R1 or R2 etc.. or r1 or r2 etc..
-
 deg_design = do.call(rbind,strsplit(samples.vec,"_"))
 # remove columns with one value:
 deg_design = deg_design[,apply(deg_design,2,function(x){length(unique(x)) > 1})]
@@ -252,7 +270,6 @@ ori_mat = round(x,0)
 Result = RunNorm(ori_mat,deg_design,fix_reference=deg_design$Sample_ID,row_name_index=1,saving_path=save_folder,n_pop=1,n_pop_reference=1,BiocParam=param)
 colData = Result$scaling_factors
 mat = Result$norm_mat
-
 deg_design = deg_design[order(deg_design$Sample_Replicate),]
 # Norm on PLASMID BY Replicate:
 
@@ -322,46 +339,52 @@ if(length(unique(deg_design$Sample_Replicate)) > 1){
     counts_vst <- as.data.frame(counts_vst,stringsAsFactors=FALSE)
     colnames(counts_vst ) <- c(colnames(counts_vst)[1:ncol(counts_vst)-1],"log2FoldChange")
     res = counts_vst
-
 }
 
+# customized!!! re-check for consistency!!
 rownames(res) = gsub("_","",rownames(res))
 rownames(res) = gsub("gRNA","gRNA_",rownames(res))
 # We compute this for a range of cut offs:
-l2c_cuts <- seq(min(abs(res$log2FoldChange)),max(abs(res$log2FoldChange)),by=0.001)
-
+l2c_cuts <- seq(min(abs(res$log2FoldChange)),max(abs(res$log2FoldChange)),by=0.01) 
+# 0.01 means 2^0.01 = 1.007 i.e. 0.7% change less then 1% change - so we check increasing the l2fc by 0.01 already quite granular
+# checnging this will increase matrix size and computation time - and could exceed memory - also in the Kde2d function we limit the bandwidth to and minimum of 0.01
+# else huge memory usage and long computation time
 
 # We separate up and down regulated effects:
 res_up = res[which(res$log2FoldChange > 0),]
 res_down = res[which(res$log2FoldChange < 0),]
 res_down$log2FoldChange <- -1*res_down$log2FoldChange
 
+rn <- unique(gsub("_[0-9]$","",rownames(res)))
+
 if(opt$use_nt_scramble){
     # we separate the "scaramble|random" targets from the rest:
-    res_up_r = res_up[grepl("^rand|^scram|^non_target",rownames(res_up)),]
-    res_up = res_up[!grepl("^rand|^scram|^non_target",rownames(res_up)),]
-    res_down_r = res_down[grepl("^rand|^scram|^non_target",rownames(res_down)),]
-    res_down = res_down[!grepl("^rand|^scram|^non_target",rownames(res_down)),]
+    res_up_r = res_up[grepl("^rand|^scram|^nontargeting",rownames(res_up)),]
+    res_up = res_up[!grepl("^rand|^scram|^nontargeting",rownames(res_up)),]
+    res_down_r = res_down[grepl("^rand|^scram|^nontargeting",rownames(res_down)),]
+    res_down = res_down[!grepl("^rand|^scram|^nontargeting",rownames(res_down)),]
 }else{
     # if no scrrambled to be used we randomly all the gRNA by grouping in random sets
     res_up_r = res_up
-    res_up = res_up[!grepl("^rand|^scram|^non_target",rownames(res_up)),]
+    res_up = res_up[!grepl("^rand|^scram|^nontargeting",rownames(res_up)),]
     res_down_r = res_down
-    res_down = res_down[!grepl("^rand|^scram|^non_target",rownames(res_down)),]
+    res_down = res_down[!grepl("^rand|^scram|^nontargeting",rownames(res_down)),]
 }
 
 
 # for the target we get the number of hits per target for each l2fc:
-res_up <- lapply(l2c_cuts,function(x) get_hits_per_target(res_up,x))
-res_up <- do.call(rbind,res_up)
-res_down <- lapply(l2c_cuts,function(x) get_hits_per_target(res_down,x))
-res_down <- do.call(rbind,res_down)
+res_up <- BiocParallel::bplapply(l2c_cuts,function(x) get_hits_per_target(res_up,x),BPPARAM = param)
+res_up <- as.data.frame(do.call(rbind,res_up),stringsAsFactors=FALSE)
+res_down <- BiocParallel::bplapply(l2c_cuts,function(x) get_hits_per_target(res_down,x),BPPARAM = param)
+res_down <- as.data.frame(do.call(rbind,res_down),stringsAsFactors=FALSE)
 # as we considered the abs of the res_down their associated l2fc are negative:
 res_down$log2fc <- -1*res_down$log2fc
+# clear the memory with gc() keeping anythin to be used downstream:
+gc() 
 
 # Ok given the res_up and res_down we compute the bivariate distribution of the number of hits per target for each pair of log2fc:
 # We aggregate by n_hits and log2fc and count the number of elements:
-xy <- rbind(res_up,res_down)
+xy <- as.data.frame(rbind(res_up,res_down),stringsAsFactors=FALSE)
 rownames(xy) = 1:dim(xy)[1]
 
 # Ok now we do the same for the random hits - but we bootstrap the number of hits per target:
@@ -386,6 +409,7 @@ l1 = list(
 l_rep = rep(list(l1),10)
 # select top 10 elelemts:
 list_r <-  BiocParallel::bplapply(l_rep,random_gen,BPPARAM = param)
+gc()
 
 # for each of the 1000 list we compute the MASS::kde2d
 # for consistency we need to set "n" and "lim" coherently to the xy of the real data:
@@ -396,7 +420,7 @@ n_grid_y <- dim(res)[1] # like saying each oligo has a different log2fc
 list_r_m <- lapply(1:length(list_r),function(i){
     l = list()
     l[["id"]] = i
-    l[["xy"]] = list_r[[i]]
+    l[["xy"]] = data.table(list_r[[i]])
     l[["n_x"]] = n_grid_x
     l[["n_y"]] = n_grid_y
     l[["n_v"]] = unique(xy$log2fc)
@@ -409,7 +433,11 @@ setwd(save_folder_sub_stat)
 # generate a temporary folder:
 dir.create("tmp")
 setwd("tmp")
-list_r_kde <- lapply(list_r_m,mass_kde2_parallel)
+
+# list_r_kde <- lapply(list_r_m,mass_kde2_parallel)
+# list_r_kde <- BiocParallel::bplapply(list_r_m, mass_kde2_parallel, BPPARAM = param)
+gc()
+list_r_kde <- BiocParallel::bplapply(list_r_m, function(x) BiocParallel::bptry(mass_kde2_parallel(x)), BPPARAM = param_serial)
 
 # list_r_kde we list the files generated in tmp:
 list_r_kde_f <- list.files(pattern = "^kde2d_")

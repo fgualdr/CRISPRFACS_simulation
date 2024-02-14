@@ -20,8 +20,8 @@ unlink(simulated_folder, recursive = TRUE)
 dir.create(simulated_folder)
 
 # Define the composition of the library, the proportion between positive and negative regulators, the number of non-targeting gRNA and the number of gRNA per gene
-total_genes <- c(700,1500) # n° of target genes
-n_no_effect <- c(0.9,0.7)  # percentage of genes not having an effect
+total_genes <- c(700,2000) # n° of target genes
+n_no_effect <- c(0.9)  # percentage of genes not having an effect
 pos_neg_ratio <- c(0.5,0.9,0.1)  # ratio of positive and negative regulators
 n_gRNA <- c(10,4)  # number of gRNA per target gene 
 n_non_targeting_gRNA <- 1000  # number of non-targeting gRNA
@@ -33,13 +33,13 @@ non_essential_variance <- 0  # variance of non-essential genes
 # a) positive effect: truncated normal distribution with mean 0.1, variance 2, truncated between 0.1 and 4
 pos_effect_lower_bound <- 0.1  # lower bound of the positive effect # this can be reduced to check sensitivity of the Tool in detecting small effects
 pos_effect_upper_bound <- 3   # upper bound of the positive effect
-pos_effect_variance <- c(0.5,1,2.5,5)
-mean_pos_effect <- rev(c(0.1,0.25,0.5,1))
+pos_effect_variance <- c(0.5,3) # all similar vs highly variable
+mean_pos_effect <- rev(c(0.1,0.25,0.5))
 # b) negative effect: truncated normal distribution with mean -0.5, variance 2, truncated between -4 and -0.1
 neg_effect_lower_bound <- -3   # lower bound of the negative effect - cAN BE USED TO SIMULATE OUTLIERS
 neg_effect_upper_bound <- -0.1  # upper bound of the negative effect
-neg_effect_variance <- c(0.5,1,2.5,5)
-mean_neg_effect <- rev(c(0.1,0.25,0.5,1) )
+neg_effect_variance <- c(0.5,3)
+mean_neg_effect <- rev(c(0.1,0.25,0.5) )
 # We deine the variability of the gRNA efficiency
 guide_efficiency_mean = 0.8
 guide_efficiency_variance = 0.05  # variance of the gRNA efficiency (so if a group of gRNA targeting the same gene will have the gene specific effect we should add a variability to the gRNA efficiency)
@@ -47,7 +47,7 @@ guide_efficiency_variance = 0.05  # variance of the gRNA efficiency (so if a gro
 # n° of replicate experiments
 n_reps = 3  # number of replica experiments
 # n° of read counts per gRNA (this is the average count per gRNA)
-depth_factors = c(100,200) # read per gRNA
+depth_factors = c(200) # read per gRNA
 interceptSD <- 0.8 # this is the spead of expression levels in log2 scale
 # add parameters to include variability in registering the read-out by the FACS machine
 noise_mean = 0
@@ -93,7 +93,7 @@ for(test in 1:nrow(Combo_params)){
   pos_effect_variance = Combo_params$pos_effect_variance[test]
   mean_pos_effect = Combo_params$mean_pos_effect[test]
   neg_effect_variance = Combo_params$neg_effect_variance[test] 
-  mean_neg_effect = Combo_params$mean_neg_effect[test] * -1
+  mean_neg_effect = Combo_params$mean_neg_effect[test] * -1 # we need to invert the sign of the mean negative effect 
   depth_factors = Combo_params$depth_factors[test]
   noise_variance = Combo_params$noise_variance[test]
 
