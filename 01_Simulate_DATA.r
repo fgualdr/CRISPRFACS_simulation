@@ -16,7 +16,7 @@ setwd("/hpcnfs/data/GN2/fgualdrini/Master_batch_scripts/CRISPR_TOOLS_BANCH/Simul
 
 # add a folder to keep the tests:
 simulated_folder <- paste0(getwd(),"/Simulated_data/")
-unlink(simulated_folder, recursive = TRUE)
+# unlink(simulated_folder, recursive = TRUE)
 dir.create(simulated_folder)
 
 # Define the composition of the library, the proportion between positive and negative regulators, the number of non-targeting gRNA and the number of gRNA per gene
@@ -409,5 +409,78 @@ for(test in 1:nrow(Combo_params)){
       write.table(Combo, file=paste0(subfolder_frac,"groundTruth_rep_all.txt"), sep="\t", quote=FALSE, row.names=FALSE)
   }
 }
+
+
+## - Path to simulation is in /hpcnfs/data/GN2/fgualdrini/Master_batch_scripts/CRISPR_TOOLS_BANCH/Simulations_KERNEL/Simulated_data/
+## we will re-design each table, collect them into a tuple : [metadata, list of data.tables] and save them as a .RDS file
+## the data.tables will include just the simulated counts per gRNA per replicate per sorting fraction (PRESORT, HIGH, LOW)
+## to make the simulation compatible with MAGECK we will have: "sgRNA", "Gene", followed by the counts per replicate per sorting fraction
+
+
+# list the files recursively:
+all_files <- list.files(path = simulated_folder, recursive = TRUE, full.names = TRUE, pattern = "groundTruth_rep_all.txt")
+
+## we can now make the metadata out of the file names - including folders names etc:
+names <- strsplit(all_files, "/")
+names <- do.call(rbind, names)  
+# remove columns with only one possible value
+cn <- apply(names, 2, function(x) length(unique(x)))
+names <- names[,cn>1]
+parameters <- strsplit(names[,1], "_")
+parameters <- lapply(parameters,function(x) {
+                      # collect numeric only and convert to numeric
+                      x = x[!grepl("[^0-9.]", x)]
+                      # the order should always be the same i.e. :
+                      names(x) = c( "total_genes", 
+                                    "n_no_effect", 
+                                    "pos_neg_ratio", 
+                                    "n_gRNA", 
+                                    "pos_effect_variance", 
+                                    "mean_pos_effect", 
+                                    "neg_effect_variance", 
+                                    "mean_neg_effect", 
+                                    "depth_factors", 
+                                    "noise_variance")
+                      return(x)
+                    })
+parameters <- as.data.frame(do.call(rbind, parameters), stringsAsFactors = FALSE)
+# add the sorting fraction
+parameters$sorting_fraction = gsub("sorted_","",names[,2])
+parameters$path = all_files
+# convert to data.table
+metadata <- as.data.frame(parameters)
+metadata$file_id <- paste0("test_",1:nrow(metadata))
+# save the metadata to /hpcnfs/data/GN2/fgualdrini/Master_batch_scripts/CRISPR_TOOLS_BANCH/Simulations_KERNEL/meta_data.txt
+write.table(metadata, file="/hpcnfs/data/GN2/fgualdrini/Master_batch_scripts/CRISPR_TOOLS_BANCH/Simulations_KERNEL/meta_data.txt", sep="\t", quote=FALSE, row.names=FALSE)
+
+## now we can read in the files in metadata$path and convert them to data.tables structuring it as required by MAGECK
+## we therefore save the datasets
+dir_tables <- "/hpcnfs/data/GN2/fgualdrini/Master_batch_scripts/CRISPR_TOOLS_BANCH/Simulations_KERNEL/Simulated_data_counts/"
+dir.create(dir_tables)
+
+dats <- apply(metadata, 1, function(x) {
+
+  # read in the file
+  dat <- read.delim(x["path"])
+
+  g_ids <- dat[,colnames(dat)[grep("gid_rep", colnames(dat))]]
+  g_ids <- apply(g_ids, 1, function(x)unique(x))
+  g_ids <- gsub("_","",g_ids)
+
+  el_ids <- dat[,colnames(dat)[grep("elements_", colnames(dat))]]
+  el_ids <- apply(el_ids, 1, function(x)unique(x))
+  el_ids <- gsub("_","",el_ids)
+  el_ids <- gsub("gRNA","gRNA_",el_ids)
+
+  conditions <- grep("^PRESORT|^HIGH|^LOW", toupper(colnames(dat)))
+
+  dat_set <- cbind( el_ids,g_ids, dat[,conditions])
+  colnames(dat_set) <- c("sgRNA", "Gene", colnames(dat[,conditions]))
+
+  write.table(dat_set, file=paste0(dir_tables,x["file_id"],".txt"), sep="\t", quote=FALSE, row.names=FALSE)
+  gc()
+  return(dat_set)
+})
+
 
 
