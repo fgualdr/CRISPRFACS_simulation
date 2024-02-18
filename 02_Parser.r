@@ -22,7 +22,7 @@ setwd("/hpcnfs/data/GN2/fgualdrini/Master_batch_scripts/CRISPR_TOOLS_BANCH/Simul
 use_nt_scramble = TRUE
 
 # 1) CPUS:
-cpus=5
+cpus=4
 if(cpus <= 1){cpus = 2} ## at least 2 cpus
 if(!is.null(cpus)){
     param <- BiocParallel::SnowParam(workers=cpus,tasks=0,stop.on.error=TRUE,progressbar = TRUE,type="SOCK")
@@ -43,10 +43,12 @@ meta_test <- read.delim("/hpcnfs/data/GN2/fgualdrini/Master_batch_scripts/CRISPR
 # loop through the meta data - for each row we will run the analysis:
 for(i in 1:nrow(meta_test)){
     # get the row:
+    cat("Processing:",meta_test[i,"file_id"],"\n")
     file = all_simulations[meta_test[i,"file_id"]]
-
+    cat("File:",file,"\n")
     simulation_path_test <- paste0(simulation_path,"/",meta_test[i,"file_id"],"/")
-    dir.create(simulation_path_test,showWarnings = FALSE)
+    cat("Simulation path:",simulation_path_test,"\n")
+    dir.create(simulation_path_test)
 
     # get the input file:
     x = read.delim(file,sep="\t",header=TRUE,row.names=NULL,stringsAsFactors=FALSE)
@@ -59,9 +61,9 @@ for(i in 1:nrow(meta_test)){
 
     # the analysis will be executed pair-wise:
     list_comparisons <- list(
-            high_vs_low = c("high","low"),
-            high_vs_presort = c("high","presort"),
-            low_vs_presort = c("low","presort")
+            high_vs_low = c("high","low")
+#            high_vs_presort = c("high","presort"),
+ #           low_vs_presort = c("low","presort")
     )
 
     for(comparison in list_comparisons){
@@ -194,7 +196,7 @@ for(i in 1:nrow(meta_test)){
 
         # 7) Compute the bivariate distribution:
         # We compute this for a range of cut offs:
-        l2c_cuts <- seq(min(abs(res$log2FoldChange)),max(abs(res$log2FoldChange)),by=0.01) 
+        l2c_cuts <- seq(min(abs(res$log2FoldChange)),max(abs(res$log2FoldChange)),by=log2(1.05)) 
         # 0.01 means 2^0.01 = 1.007 i.e. 0.7% change less then 1% change - so we check increasing the l2fc by 0.01 already quite granular
         # checnging this will increase matrix size and computation time - and could exceed memory - also in the Kde2d function we limit the bandwidth to and minimum of 0.01
         # else huge memory usage and long computation time
@@ -323,28 +325,17 @@ for(i in 1:nrow(meta_test)){
         kde2d_mean$z = (kde2d_mean$z*cell_size)/norm 
         # Plot the bivariate distribution:
         cat("Plot the bivariate distribution\n")
+        y_lim <- summary(kde2d_mean$y)
+        # consider 1st and 3rd quartile:
+        y_lim <- quantile(kde2d_mean$y,probs=c(0.3,0.7))
         pdf(paste0(save_folder_sub_stat,"/Multivariate_",target,"_vs_",control,"_KDE_RANDOM.pdf"))
-            par( mfrow= c(2,2) )
             filled.contour( 
                             kde2d_mean,
                             color.palette=colorRampPalette(c('white','blue','yellow','red','darkred')),
-                            ylim = range(c(min(ylim),max(ylim)), finite = TRUE),
+                            ylim = range(y_lim, finite = TRUE),
                             zlim = range(kde2d_mean$z, finite = TRUE)
                             )
-            persp(kde2d_mean, phi = 40, theta = 70, d = 5,col="#B8EBF2",border=NULL)
         dev.off()
-
-        png(paste0(save_folder_sub_stat,"/Multivariate_",target,"_vs_",control,"_KDE_RANDOM.png"))
-            par( mfrow= c(2,2) )
-            filled.contour( 
-                            kde2d_mean,
-                            color.palette=colorRampPalette(c('white','blue','yellow','red','darkred')),
-                            ylim = range(c(-0.5,0.5), finite = TRUE),
-                            zlim = range(kde2d_mean$z, finite = TRUE)
-                            )
-            #persp(kde2d_mean, phi = 40, theta = 70, d = 5,col="#B8EBF2",border=NULL)
-        dev.off()
-
 
         # Define the function such as that given a pair of hits and log2fc it returns the probability after having interpolated the density function:
         kde2dAkima = kde2d_mean$z
@@ -352,249 +343,117 @@ for(i in 1:nrow(meta_test)){
         rownames(kde2dAkima) = kde2d_mean$x
         kde2dAkima = reshape2::melt(kde2dAkima)
         colnames(kde2dAkima) = c("n_hits","log2fc","density")
+        kde2dAkima = kde2dAkima[which(kde2dAkima$n_hits > 0 & kde2dAkima$n_hits <= max_oligo_per_target),]
+        # scale the density to sum to 1:
+        kde2dAkima$density = kde2dAkima$density/sum(kde2dAkima$density)
 
         # For evey point in the xy data frame we compute the probability of the point given the density function:
         # The probability is reported as 1-cdf and in particular we compute the cdf as the sum of the density from the point to the upper/lower limit
 
         Res = xy
-
         # for each element in Res$target_name we keep those rows having highest n_hits and highest abs(log2fc)
         Res = Res[order(Res$n_hits,abs(Res$log2fc),decreasing=TRUE),]
+        # for each pair of target_name, n_hits we keep the highest log2fc 
+        Res_up = Res[Res$log2fc >0,]
+        # use goup by and select the single element s with highest log2fc
+        Res_up = Res_up %>% group_by(target_name,n_hits) %>% filter(log2fc == max(log2fc))
+        # convert back to data frame:
+        Res_up = as.data.frame(Res_up,stringsAsFactors=FALSE)
+        
+        # or the lowest log2fc for the down
+        Res_down = Res[Res$log2fc <0,]
+        Res_down = Res_down %>% group_by(target_name,n_hits) %>% filter(log2fc == min(log2fc))
+        Res_down = as.data.frame(Res_down,stringsAsFactors=FALSE)
 
         # up
-        Res_up = Res[Res$log2fc >0,]
-        Res_up = Res_up[order(Res_up$log2fc,decreasing=TRUE),]
-        Res_up = Res_up %>% distinct(target_name,n_hits, .keep_all = T)
         prob = lapply(1:nrow(Res_up),function(i){
-            if (Res_up$log2fc[i] < 0){
-                # Get the x_values and y_values:
-                x_idx <- which(kde2dAkima$n_hits == Res_up$n_hits[i])
-                # as the l2fc is less than 0 we need to sum the density from the point to the lower limit meanin any point below the one selected
-                y_idx = which(kde2dAkima$log2fc <= Res_up$log2fc[i])
-                # Subset the density values:
-                summed_p = sum(kde2dAkima$density[intersect(x_idx,y_idx)]) 
-                return(summed_p)
-            } else {
-                # HEre we get cdf as the sum of the density from the point to the upper limit
-                x_idx <- which(kde2dAkima$n_hits == Res_up$n_hits[i])
-                y_idx = which(kde2dAkima$log2fc >= Res_up$log2fc[i])
-                # Su up all the values 
-                summed_p = sum(kde2dAkima$density[intersect(x_idx,y_idx)])
-                return(summed_p)
+            # display a progress bar:
+            if(i %% 100 == 0){
+                cat(paste0("Progress: ",i,"/",nrow(Res_up)))
             }
+            # Here we get cdf as the sum of the density from the point to the upper limit
+            x_idx <- which(kde2dAkima$n_hits == Res_up$n_hits[i])
+            # here we need to sum the density from the point to the upper limit so any point above the one selected
+            # like saying the probability to see such a change as extreme as the one observed
+            y_idx = which(kde2dAkima$log2fc >= Res_up$log2fc[i])
+            # Su up all the values 
+            summed_p = sum(kde2dAkima$density[intersect(x_idx,y_idx)])
+            return(summed_p)
         })
+        cat("\n")
         Res_up$Bivariate_prob = unlist(prob)
-
         # down
-        Res_down = Res[Res$log2fc <0,]
-        Res_down = Res_down[order(Res_down$log2fc,decreasing=FALSE),]
-        Res_down = Res_down %>% distinct(target_name,n_hits, .keep_all = T)
         prob = lapply(1:nrow(Res_down),function(i){
-            if (Res_down$log2fc[i] < 0){
-                # Get the x_values and y_values:
-                x_idx <- which(kde2dAkima$n_hits == Res_down$n_hits[i])
-                # as the l2fc is less than 0 we need to sum the density from the point to the lower limit meanin any point below the one selected
-                y_idx = which(kde2dAkima$log2fc <= Res_down$log2fc[i])
-                # Subset the density values:
-                summed_p = sum(kde2dAkima$density[intersect(x_idx,y_idx)])
-                return(summed_p)
-            } else {
-                # HEre we get cdf as the sum of the density from the point to the upper limit
-                x_idx <- which(kde2dAkima$n_hits == Res_down$n_hits[i])
-                y_idx = which(kde2dAkima$log2fc >= Res_down$log2fc[i])
-                # Su up all the values 
-                summed_p = sum(kde2dAkima$density[intersect(x_idx,y_idx)])
-                return(summed_p)
+            if(i %% 100 == 0){
+                cat(paste0("Progress: ",i,"/",nrow(Res_up)))
             }
+            # Get the x_values and y_values:
+            x_idx <- which(kde2dAkima$n_hits == Res_down$n_hits[i])
+            # as the l2fc is less than 0 we need to sum the density from the point to the lower limit i.e. any point below the one selected
+            # like saying the probability to see such a change as extreme as the one observed
+            y_idx = which(kde2dAkima$log2fc <= Res_down$log2fc[i])
+            # Subset the density values:
+            summed_p = sum(kde2dAkima$density[intersect(x_idx,y_idx)])
+            return(summed_p)
         })
+        cat("\n")
         Res_down$Bivariate_prob = unlist(prob)
-
         Res = rbind(Res_up,Res_down)
         Res$adjp_fdr_bivariate = p.adjust(Res$Bivariate_prob, method = "fdr")
-
         write.table(Res,paste0(save_folder_sub_stat,"/Multivariate_",target,"_vs_",control,"_prob.txt"),sep="\t",col.names=NA)
 
-
-        ##################################
-        # Plot Global result:
-        ##################################
-
-        Res_by_target = split(Res,Res$target_name)
-        v_hits = as.character(1:10)
-
-        # UP
-        up_fc = lapply(Res_by_target,function(x){
-            y = x[x$log2fc > 0,"log2fc"]
-            names(y) = as.character(x[x$log2fc > 0,"n_hits"])
-            y = y[v_hits]
-            names(y) = v_hits
-            return(y)
-        })
-        up_fc = as.data.frame(do.call(cbind,up_fc),stringsAsFactors=FALSE)
-        up_fc[is.na(up_fc)] = 0
-
-        up_pval = lapply(Res_by_target,function(x){
-            y = -log10(x[x$log2fc > 0,"adjp_fdr_bivariate"])
-            names(y) = as.character(x[x$log2fc > 0,"n_hits"])
-            y = y[v_hits]
-            names(y) = v_hits
-            return(y)
-        })
-        up_pval = as.data.frame(do.call(cbind,up_pval),stringsAsFactors=FALSE)
-        up_pval[is.na(up_pval)] = 0
-
-        # DOWN
-        down_fc = lapply(Res_by_target,function(x){
-            y = x[x$log2fc < 0,"log2fc"]
-            names(y) = as.character(x[x$log2fc < 0,"n_hits"])
-            y = y[v_hits]
-            names(y) = v_hits
-            return(y)
-        })
-        down_fc = as.data.frame(do.call(cbind,down_fc),stringsAsFactors=FALSE)
-        down_fc[is.na(down_fc)] = 0
-        down_pval = lapply(Res_by_target,function(x){
-            y = -log10(x[x$log2fc < 0,"adjp_fdr_bivariate"])
-            names(y) = as.character(x[x$log2fc < 0,"n_hits"])
-            y = y[v_hits]
-            names(y) = v_hits
-            return(y)
-
-        })
-        down_pval = as.data.frame(do.call(cbind,down_pval),stringsAsFactors=FALSE)
-        down_pval[is.na(down_pval)] = 0
-
-
-        # Criteria at least 2 oligos with log2fc >= log2(1.1) and pval <= 0.01
-
-        w_tuf = apply(up_fc,2,function(x){
-            return(length(which(abs(x) >= log2(1.20))))
+        # the above will give multiple results per target - we want to integrate across all hits:
+        # we get the list of targets only make a one column data frame and then we aggregate by target_name and n_hits
+        Res = Res[,c("target_name"),drop=FALSE]
+        # get unique rows only:
+        Res = unique(Res)
+        Res$Cumulative_p_up <- 1
+        Res$Cumulative_p_down <- 1
+        # for each direction:
+        up_p <- lapply(1:nrow(Res),function(x){
+            # we integrate only for the log2fc at the various n_hits:
+            y = Res_up[Res_up$target_name == Res$target_name[x],]
+            # within the kde2dAkima we get the density for the n_hits and log2fc:
+            z_l <- lapply(1:max(kde2dAkima$n_hits),function(j){
+                # get observed limit:
+                if(any(y$n_hits %in% j)){
+                    log2fc_lim = y[y$n_hits == j,,drop=FALSE]$log2fc
+                }else{
+                    log2fc_lim = 0
+                }
+                
+                # if no values at the given n_hits we return 1:
+                x_idx <- which(kde2dAkima$n_hits == j)
+                y_idx = which(kde2dAkima$log2fc >= log2fc_lim)
+                # Su up all the values 
+                summed_p = sum(kde2dAkima$density[intersect(x_idx,y_idx)])
+                return(summed_p)
             })
-        w_tuf = w_tuf[which(w_tuf>=2)]
-        w_tup = apply(up_pval[2:nrow(up_pval),],2,function(x){max(abs(x))})
-        w_tup = w_tup[which(w_tup>0.01)]
-        w_tu = intersect(names(w_tuf),names(w_tup))
+            return(sum(unlist(z_l)))
+        })
+        Res$Cumulative_p_up <- unlist(up_p)
 
-
-        w_tdf = apply(down_fc,2,function(x){
-            return(length(which(abs(x) >= log2(1.20))))
+        down_p <- lapply(1:nrow(Res),function(x){
+            y = Res_down[Res_down$target_name == Res$target_name[x],]
+            z_l <- lapply(1:max(kde2dAkima$n_hits),function(j){
+                if(any(y$n_hits %in% j)){
+                    log2fc_lim = y[y$n_hits == j,,drop=FALSE]$log2fc
+                }else{
+                    log2fc_lim = 0
+                }
+                x_idx <- which(kde2dAkima$n_hits == j)
+                y_idx = which(kde2dAkima$log2fc <= log2fc_lim)
+                summed_p = sum(kde2dAkima$density[intersect(x_idx,y_idx)])
+                return(summed_p)
             })
-        w_tdf = w_tdf[which(w_tdf>=2)]
-        w_tdp = apply(down_pval[2:nrow(down_pval),],2,function(x){max(abs(x))})
-        w_tdp = w_tdp[which(w_tdp>0.01)]
-        w_td = intersect(names(w_tdf),names(w_tdp))
+            return(sum(unlist(z_l)))
+        })
+        Res$Cumulative_p_down <- unlist(down_p)
 
-
-        w_a = union(w_tu,w_td)
-
-        # Ranks:
-
-        ord = Res
-        ord = ord[ord$target_name %in% w_a,]
-        ord = ord[ord$n_hits >=2,]
-        ord = ord[order(ord$log2fc),]
-        ord$pos = 1:dim(ord)[1]
-        ord = split(ord,ord$target_name)
-
-        ord = unlist(lapply(ord,function(x){
-            return(sum(x$pos))
-        }))
-
-        ord = ord[order(ord)]
-
-        down_fc = down_fc[,names(ord)]
-        down_pval = down_pval[,names(ord)]
-        up_fc = up_fc[,names(ord)]
-        up_pval = up_pval[,names(ord)]
-
-        m = rbind(down_fc,up_fc)
-        ord = colSums(m)
-        names(ord) = colnames(down_fc)
-        ord = ord[order(ord)]
-
-        down_fc = down_fc[,names(ord)]
-        down_pval = down_pval[,names(ord)]
-        up_fc = up_fc[,names(ord)]
-        up_pval = up_pval[,names(ord)]
-
-        # PLOT TIME
-        # DOWN
-        # Scale to plateaux at 10^-10
-        down_pval[down_pval>=10] = 10
-        down_pval = (down_pval-min(down_pval))/max((down_pval-min(down_pval)))
-        down_pval = sqrt(down_pval/pi)
-        down_pval = (down_pval-min(down_pval))/max((down_pval-min(down_pval)))
-
-        col_fun_down = circlize::colorRamp2(c( -1 , -0.1  ), c( "blue" , "white" ) ) 
-        dds =  20/max(nrow(down_fc),ncol(down_fc))
-        HRdown = Heatmap(          down_fc,
-                                width = ncol(down_fc)*unit(dds, "cm"), 
-                                height = nrow(down_fc)*unit(dds, "cm"),
-                                rect_gp = gpar(type = "none"), 
-                                cell_fun = function(j, i, x, y, width, height, fill) {
-                                    grid.rect(x = x, y = y, width = width, height = height, gp = gpar(col = NA, fill = NA))
-                                    grid.circle(x = x, y = y, r = abs(down_pval[i, j])/2.0 * unit(dds, "cm"), 
-                                    gp = gpar(fill = col_fun_down(down_fc[i, j]), col = NA))
-                                }, 
-                                show_row_names = TRUE,
-                                show_column_names = TRUE,
-                                column_title_gp = gpar(fontsize = 5),
-                                row_title_gp = gpar(fontsize = 5),
-                                row_names_gp = gpar(fontsize = 5),
-                                heatmap_legend_param = list(title = "Calls",direction = "horizontal"),
-                                column_names_gp = gpar(fontsize = 5),
-                                row_dend_width = unit(2, "mm"),
-                                border=TRUE,
-                                col = col_fun_down ,
-                                cluster_rows = FALSE, 
-                                cluster_columns = FALSE,
-                                row_dend_reorder = FALSE,
-                                column_dend_reorder=FALSE
-                                )
-
-        # UP
-        # Scale to plateaux at 10^-10
-        up_pval[up_pval>=10] = 10
-        up_pval = (up_pval-min(up_pval))/max((up_pval-min(up_pval)))
-        up_pval = sqrt(up_pval/pi)
-        up_pval = (up_pval-min(up_pval))/max((up_pval-min(up_pval)))
-
-        col_fun_up = circlize::colorRamp2(c( 0.1, 1 ), c( "white" , "red" ) ) 
-        dds =  20/max(nrow(up_fc),ncol(up_fc))
-        HRup = Heatmap(          up_fc,
-                                width = ncol(up_fc)*unit(dds, "cm"), 
-                                height = nrow(up_fc)*unit(dds, "cm"),
-                                rect_gp = gpar(type = "none"), 
-                                cell_fun = function(j, i, x, y, width, height, fill) {
-                                    grid.rect(x = x, y = y, width = width, height = height, gp = gpar(col = NA, fill = NA))
-                                    grid.circle(x = x, y = y, r = abs(up_pval[i, j])/2.0 * unit(dds, "cm"), 
-                                    gp = gpar(fill = col_fun_up(up_fc[i, j]), col = NA))
-                                }, 
-                                show_row_names = TRUE,
-                                show_column_names = TRUE,
-                                column_title_gp = gpar(fontsize = 5),
-                                row_title_gp = gpar(fontsize = 5),
-                                row_names_gp = gpar(fontsize = 5),
-                                heatmap_legend_param = list(title = "Calls",direction = "horizontal"),
-                                column_names_gp = gpar(fontsize = 5),
-                                row_dend_width = unit(2, "mm"),
-                                border=TRUE,
-                                col = col_fun_up ,
-                                cluster_rows = FALSE, 
-                                cluster_columns = FALSE,
-                                row_dend_reorder = FALSE,
-                                column_dend_reorder=FALSE
-                                )
-
-        ht_list = HRup %v% HRdown
-        pdf(paste0(save_folder_sub_stat,"/Multivariate_",target,"_vs_",control,"_final_results_graph.pdf"),useDingbats = FALSE , width=10   , height=10)
-                draw(ht_list)
-        dev.off()  
-
-
-
-        ## from the above code we are assessing the probability to observe a determinied number of gRNA "scoring" at a specific log2fc cutoff per target.
-        ## To get an FDR we need to compare the above probability to the probability of observing the same number of gRNA "scoring" at a specific log2fc cutoff per target in the 
-        ## random data - this is already done as the random is used to generate the bi-variate frequency distribution.
-        # To get a global score per target and therefore rank them providing:
-
+        Res$adjp_fdr_bivariate_up = p.adjust(Res$Cumulative_p_up, method = "fdr")
+        Res$adjp_fdr_bivariate_down = p.adjust(Res$Cumulative_p_down, method = "fdr")
+        write.table(Res,paste0(save_folder_sub_stat,"/Multivariate_",target,"_vs_",control,"_prob_per_TARGET.txt"),sep="\t",col.names=NA)
+    }
+    # save the kde2dAkima, Res , kde2d_mean and xy
+    save(kde2dAkima,Res,kde2d_mean,xy,file=paste0(save_folder_sub_stat,"/Multivariate_",target,"_vs_",control,"_prob_per_TARGET.RData"))
+}

@@ -126,8 +126,8 @@ mass_kde2_parallel <- function(l){
             # exit to any apply or lapply or bplapply
             return(NULL) 
             }else{
-                if(h[2] <= 0.05){
-                    h[2] = 0.05 # as we binned the L2FC in 0.01 we set the bandwidth to 0.01 in case the estimate exceeds 0.01 - this control vectors dimensions
+                if(h[2] <= log2(1.05)){
+                    h[2] = log2(1.05) # as we binned the L2FC in 0.01 we set the bandwidth to 0.01 in case the estimate exceeds 0.01 - this control vectors dimensions
                 }
             }
 
