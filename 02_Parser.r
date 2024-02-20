@@ -11,7 +11,7 @@ library(tidyr)
 library(tibble)
 library(ggplot2)
 library(data.table)
-library(MASS)
+library(MASS) 
 library(BiocParallel)
 library(snow)
 source("/hpcnfs/data/GN2/fgualdrini/Master_batch_scripts/CRISPR_TOOLS_BANCH/Simulations_KERNEL/accessory_utiles_kernel.r")
@@ -35,7 +35,7 @@ if(!is.null(cpus)){
 }
 
 # 2) Input file:
-all_simulations <- list.files("/hpcnfs/data/GN2/fgualdrini/Master_batch_scripts/CRISPR_TOOLS_BANCH/Simulations_KERNEL/Simulated_data_counts/",pattern="txt$",full.names=TRUE,recursive=TRUE)
+all_simulations <- list.files("/hpcnfs/data/GN2/fgualdrini/Master_batch_scripts/CRISPR_TOOLS_BANCH/Simulations_KERNEL/Simulated_data_counts/",pattern=".txt$",full.names=TRUE,recursive=FALSE)
 names(all_simulations) <- gsub(".txt","",basename(all_simulations))
 simulation_path <- unique(dirname(all_simulations))
 meta_test <- read.delim("/hpcnfs/data/GN2/fgualdrini/Master_batch_scripts/CRISPR_TOOLS_BANCH/Simulations_KERNEL/meta_data.txt",sep="\t",header=TRUE,row.names=NULL,stringsAsFactors=FALSE)
@@ -196,7 +196,7 @@ for(i in 1:nrow(meta_test)){
 
         # 7) Compute the bivariate distribution:
         # We compute this for a range of cut offs:
-        l2c_cuts <- seq(min(abs(res$log2FoldChange)),max(abs(res$log2FoldChange)),by=log2(1.05)) 
+        l2c_cuts <- seq(min(abs(res$log2FoldChange)),max(abs(res$log2FoldChange)),by=log2(1.01)) 
         # 0.01 means 2^0.01 = 1.007 i.e. 0.7% change less then 1% change - so we check increasing the l2fc by 0.01 already quite granular
         # checnging this will increase matrix size and computation time - and could exceed memory - also in the Kde2d function we limit the bandwidth to and minimum of 0.01
         # else huge memory usage and long computation time
@@ -368,8 +368,8 @@ for(i in 1:nrow(meta_test)){
         # up
         prob = lapply(1:nrow(Res_up),function(i){
             # display a progress bar:
-            if(i %% 100 == 0){
-                cat(paste0("Progress: ",i,"/",nrow(Res_up)))
+            if(i %% 1000 == 0){
+                cat(paste0("Progress: ",i,"/",nrow(Res_up),"\n"))
             }
             # Here we get cdf as the sum of the density from the point to the upper limit
             x_idx <- which(kde2dAkima$n_hits == Res_up$n_hits[i])
@@ -384,8 +384,8 @@ for(i in 1:nrow(meta_test)){
         Res_up$Bivariate_prob = unlist(prob)
         # down
         prob = lapply(1:nrow(Res_down),function(i){
-            if(i %% 100 == 0){
-                cat(paste0("Progress: ",i,"/",nrow(Res_up)))
+            if(i %% 1000 == 0){
+                cat(paste0("Progress: ",i,"/",nrow(Res_up),"\n"))
             }
             # Get the x_values and y_values:
             x_idx <- which(kde2dAkima$n_hits == Res_down$n_hits[i])
@@ -404,56 +404,118 @@ for(i in 1:nrow(meta_test)){
 
         # the above will give multiple results per target - we want to integrate across all hits:
         # we get the list of targets only make a one column data frame and then we aggregate by target_name and n_hits
-        Res = Res[,c("target_name"),drop=FALSE]
+        Res_t = Res[,c("target_name"),drop=FALSE]
         # get unique rows only:
-        Res = unique(Res)
-        Res$Cumulative_p_up <- 1
-        Res$Cumulative_p_down <- 1
+        Res_t = unique(Res_t)
+        Res_t$Cumulative_p_up <- 1
+        Res_t$Cumulative_p_down <- 1
         # for each direction:
-        up_p <- lapply(1:nrow(Res),function(x){
-            # we integrate only for the log2fc at the various n_hits:
-            y = Res_up[Res_up$target_name == Res$target_name[x],]
-            # within the kde2dAkima we get the density for the n_hits and log2fc:
-            z_l <- lapply(1:max(kde2dAkima$n_hits),function(j){
-                # get observed limit:
-                if(any(y$n_hits %in% j)){
-                    log2fc_lim = y[y$n_hits == j,,drop=FALSE]$log2fc
-                }else{
-                    log2fc_lim = 0
+        up_p <- lapply(1:nrow(Res_t),function(x){
+            if(x %% 100 == 0){
+                cat(paste0("Progress: ",x,"/",nrow(Res_t),"\n"))
+            }
+            if(length(which(Res_up$target_name %in% Res_t$target_name[x])) >0){
+                # we integrate only for the log2fc at the various n_hits:
+                y = Res_up[which(Res_up$target_name %in% Res_t$target_name[x]),]
+                rownames(y) = paste0(y$target_name,"_",y$n_hits)
+                # we make a data frame empty with target_name, n_hits, log2fc and Bivariate_prob
+                # target_name the same as in y, n_hits 1:max(kde2dAkima$n_hits)
+                y_d <- data.frame( target_name=rep(Res_t$target_name[x],length(1:max(kde2dAkima$n_hits))),
+                                    n_hits=1:max(kde2dAkima$n_hits),
+                                    log2fc=rep(NA,length(1:max(kde2dAkima$n_hits))),
+                                    Bivariate_prob=rep(NA,length(1:max(kde2dAkima$n_hits))))
+                rownames(y_d) = paste0(y_d$target_name,"_",y_d$n_hits)
+                y_d$Bivariate_prob = y[rownames(y_d),"Bivariate_prob"]
+                y_d$log2fc = y[rownames(y_d),"log2fc"]
+                # now we might have a situation where we need to fill in the NAs starting from the higher n_hits:
+                # if the higher n_hits has log2fc == NA we need to give all the kde2dAkima$density having n_hits == with the same n_hits and lof2fc >=0 so we sum all of them 
+                # if subsequent n_hits have log2fc == NA we need to give all the kde2dAkima$density having n_hits == with the same n_hits and lof2fc >= log2fc of the previous (i.e. the one with higer n_hits)
+                # we do this for all the n_hits:
+                c = max(kde2dAkima$n_hits)
+                for(i in length(1:max(kde2dAkima$n_hits)):1){
+                    if(is.na(y_d$log2fc[i]) & i == c){
+                        # get the x_values and y_values:
+                        x_idx <- which(kde2dAkima$n_hits == y_d$n_hits[i])
+                        y_idx = which(kde2dAkima$log2fc >= 0)
+                        # Su up all the values
+                        summed_p = sum(kde2dAkima$density[intersect(x_idx,y_idx)])
+                        y_d$Bivariate_prob[i] = summed_p
+                    }else{
+                        if(is.na(y_d$log2fc[i])){
+                            # get the x index:
+                            x_idx <- which(kde2dAkima$n_hits == y_d$n_hits[i])
+                            # we get the lfc of the previous n_hits : ie.e the higher one:
+                            lfc = y_d$log2fc[i+1]
+                            y_idx = which(kde2dAkima$log2fc >= lfc)
+                            # Su up all the values
+                            summed_p = sum(kde2dAkima$density[intersect(x_idx,y_idx)])
+                            y_d$Bivariate_prob[i] = summed_p
+                            y_d$log2fc[i] = lfc
+                        }
+                    }
                 }
-                
-                # if no values at the given n_hits we return 1:
-                x_idx <- which(kde2dAkima$n_hits == j)
-                y_idx = which(kde2dAkima$log2fc >= log2fc_lim)
-                # Su up all the values 
-                summed_p = sum(kde2dAkima$density[intersect(x_idx,y_idx)])
-                return(summed_p)
-            })
-            return(sum(unlist(z_l)))
+                return(sum(y_d$Bivariate_prob))
+            }else{
+                return(1)
+            }
         })
-        Res$Cumulative_p_up <- unlist(up_p)
-
-        down_p <- lapply(1:nrow(Res),function(x){
-            y = Res_down[Res_down$target_name == Res$target_name[x],]
-            z_l <- lapply(1:max(kde2dAkima$n_hits),function(j){
-                if(any(y$n_hits %in% j)){
-                    log2fc_lim = y[y$n_hits == j,,drop=FALSE]$log2fc
-                }else{
-                    log2fc_lim = 0
+        Res_t$Cumulative_p_up = unlist(up_p)
+        # for the down 
+        down_p <- lapply(1:nrow(Res_t),function(x){
+            if(x %% 100 == 0){
+                cat(paste0("Progress: ",x,"/",nrow(Res_t),"\n"))
+            }
+            if(length(which(Res_down$target_name %in% Res_t$target_name[x])) >0){
+                # we integrate only for the log2fc at the various n_hits:
+                y = Res_down[ which(Res_down$target_name %in% Res_t$target_name[x]),]
+                rownames(y) = paste0(y$target_name,"_",y$n_hits)
+                # we make a data frame empty with target_name, n_hits, log2fc and Bivariate_prob
+                # target_name the same as in y, n_hits 1:max(kde2dAkima$n_hits)
+                y_d <- data.frame( target_name=rep(Res_t$target_name[x],length(1:max(kde2dAkima$n_hits))),
+                                    n_hits=1:max(kde2dAkima$n_hits),
+                                    log2fc=rep(NA,length(1:max(kde2dAkima$n_hits))),
+                                    Bivariate_prob=rep(NA,length(1:max(kde2dAkima$n_hits))))
+                rownames(y_d) = paste0(y_d$target_name,"_",y_d$n_hits)
+                y_d$Bivariate_prob = y[rownames(y_d),"Bivariate_prob"]
+                y_d$log2fc = y[rownames(y_d),"log2fc"]
+                # now we might have a situation where we need to fill in the NAs starting from the higher n_hits:
+                # if the higher n_hits has log2fc == NA we need to give all the kde2dAkima$density having n_hits == with the same n_hits and lof2fc >=0 so we sum all of them 
+                # if subsequent n_hits have log2fc == NA we need to give all the kde2dAkima$density having n_hits == with the same n_hits and lof2fc >= log2fc of the previous (i.e. the one with higer n_hits)
+                # we do this for all the n_hits:
+                c = max(kde2dAkima$n_hits)
+                for(i in length(1:max(kde2dAkima$n_hits)):1){
+                    if(is.na(y_d$log2fc[i]) & i == c){
+                        # get the x_values and y_values:
+                        x_idx <- which(kde2dAkima$n_hits == y_d$n_hits[i])
+                        y_idx = which(kde2dAkima$log2fc <= 0)
+                        # Su up all the values
+                        summed_p = sum(kde2dAkima$density[intersect(x_idx,y_idx)])
+                        y_d$Bivariate_prob[i] = summed_p
+                    }else{
+                        if(is.na(y_d$log2fc[i])){
+                            # get the x index:
+                            x_idx <- which(kde2dAkima$n_hits == y_d$n_hits[i])
+                            # we get the lfc of the previous n_hits : ie.e the higher one:
+                            lfc = y_d$log2fc[i+1]
+                            y_idx = which(kde2dAkima$log2fc <= lfc)
+                            # Su up all the values
+                            summed_p = sum(kde2dAkima$density[intersect(x_idx,y_idx)])
+                            y_d$Bivariate_prob[i] = summed_p
+                            y_d$log2fc[i] = lfc
+                        }
+                    }
                 }
-                x_idx <- which(kde2dAkima$n_hits == j)
-                y_idx = which(kde2dAkima$log2fc <= log2fc_lim)
-                summed_p = sum(kde2dAkima$density[intersect(x_idx,y_idx)])
-                return(summed_p)
-            })
-            return(sum(unlist(z_l)))
+                return(sum(y_d$Bivariate_prob))
+            }else{
+                return(1)
+            }
         })
-        Res$Cumulative_p_down <- unlist(down_p)
+        Res_t$Cumulative_p_down = unlist(down_p)
 
-        Res$adjp_fdr_bivariate_up = p.adjust(Res$Cumulative_p_up, method = "fdr")
-        Res$adjp_fdr_bivariate_down = p.adjust(Res$Cumulative_p_down, method = "fdr")
-        write.table(Res,paste0(save_folder_sub_stat,"/Multivariate_",target,"_vs_",control,"_prob_per_TARGET.txt"),sep="\t",col.names=NA)
+        Res_t$adjp_fdr_bivariate_up = p.adjust(Res_t$Cumulative_p_up, method = "fdr")
+        Res_t$adjp_fdr_bivariate_down = p.adjust(Res_t$Cumulative_p_down, method = "fdr")
+        write.table(Res_t,paste0(save_folder_sub_stat,"/Multivariate_",target,"_vs_",control,"_prob_per_TARGET.txt"),sep="\t",col.names=NA)
     }
     # save the kde2dAkima, Res , kde2d_mean and xy
-    save(kde2dAkima,Res,kde2d_mean,xy,file=paste0(save_folder_sub_stat,"/Multivariate_",target,"_vs_",control,"_prob_per_TARGET.RData"))
+    save(kde2dAkima,Res_t,Res_up,Res_down,kde2d_mean,xy,file=paste0(save_folder_sub_stat,"/Multivariate_",target,"_vs_",control,"_prob_per_TARGET.RData"))
 }
